@@ -343,6 +343,83 @@ public:
         }
     }
 
+
+    CComPtr<ID3D12Resource> uploadBuffer;
+    CComPtr<ID3D12Resource> inputBuffer;
+
+    CComPtr<ID3D12Resource> outputBuffer;
+
+    void CreateBuffers(size_t Total,void* data,std::vector<std::tuple<size_t,size_t>> ranges,bool O)
+    {
+        auto x1 = O ? CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT) : CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto x2 = CD3DX12_RESOURCE_DESC::Buffer(Total,O ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE);
+        THROW_IF_FAILED(d3D12Device->CreateCommittedResource(
+            &x1,
+            D3D12_HEAP_FLAG_NONE,
+            &x2,
+            O ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(O ? &outputBuffer : &uploadBuffer)));
+        if (O == 0)
+        {
+            auto x3 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+            auto x4 = CD3DX12_RESOURCE_DESC::Buffer(Total, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            THROW_IF_FAILED(d3D12Device->CreateCommittedResource(
+                &x3,
+                D3D12_HEAP_FLAG_NONE,
+                &x4,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(&inputBuffer)));
+        }
+
+        if (O == 1)
+        {
+            std::vector<DML_BUFFER_BINDING> outputBufferBinding(ranges.size());
+            std::vector<DML_BINDING_DESC> outputBindingDesc(ranges.size());
+            for (size_t i = 0; i < ranges.size(); i++)
+            {
+                auto& ob = outputBufferBinding[i];
+                ob.Buffer = outputBuffer;
+                ob.Offset = std::get<0>(ranges[i]);
+                ob.SizeInBytes = std::get<1>(ranges[i]);
+
+                auto& od = outputBindingDesc[i];
+                od.Type = DML_BINDING_TYPE_BUFFER;
+                od.Desc = &ob;                    
+            };
+            dmlBindingTable->BindOutputs((UINT)ranges.size(), outputBindingDesc.data());
+            return;
+        }
+
+        D3D12_SUBRESOURCE_DATA tensorSubresourceData{};
+        tensorSubresourceData.pData = data;
+        tensorSubresourceData.RowPitch = static_cast<LONG_PTR>(Total);
+        tensorSubresourceData.SlicePitch = tensorSubresourceData.RowPitch;
+
+        // Upload the input tensor to the GPU.
+        ::UpdateSubresources(commandList, inputBuffer, uploadBuffer, 0, 0, 1, &tensorSubresourceData);
+
+        auto x9 = CD3DX12_RESOURCE_BARRIER::Transition(inputBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        commandList->ResourceBarrier(1, &x9);
+
+        std::vector<DML_BUFFER_BINDING> inputBufferBinding;
+        inputBufferBinding.resize(ranges.size());
+        std::vector<DML_BINDING_DESC> inputBindingDesc(ranges.size());
+        for (size_t i = 0; i < ranges.size(); i++)
+        {
+            auto& ibb = inputBufferBinding[i];
+            ibb.Buffer = inputBuffer;
+            ibb.Offset = std::get<0>(ranges[i]);
+            ibb.SizeInBytes = std::get<1>(ranges[i]);
+
+            inputBindingDesc[i].Type = DML_BINDING_TYPE_BUFFER;
+            inputBindingDesc[i].Desc = &ibb;
+
+        }
+        dmlBindingTable->BindInputs((UINT)inputBindingDesc.size(), inputBindingDesc.data());
+    }
+
     void Record(int what)
     {
         if (what == 0)
@@ -412,8 +489,6 @@ int main()
  {
  //   RandomData();
 
-    // Test CPU
-    LinearRegressionCPU(xs.data(), ys.data(), N);
 
 	CoInitialize(0);
     ML ml;
@@ -428,6 +503,10 @@ int main()
 #ifndef Method
 #error Please define Method above to 1,2 or 3
 #endif
+
+    if (Method == 3)
+        LinearRegressionCPU(xs.data(), ys.data(), N);
+
     UINT64 tensorInputSize = 0;
     std::vector<FLOAT> inputTensorElementArray;
     if (Method == 1)
@@ -558,182 +637,30 @@ int main()
     ml.RebindPersistent();
 
 
+   if (Method == 1)
+       ml.CreateBuffers(tensorInputSize, inputTensorElementArray.data(), { {0,tensorInputSize} },0);
 
-    // Create tensor buffers for upload/input/output/readback of the tensor elements.
-    CComPtr<ID3D12Resource> uploadBuffer;
-    CComPtr<ID3D12Resource> inputBuffer;
+   if (Method == 2)
+       ml.CreateBuffers(tensorInputSize, inputTensorElementArray.data(), { {0,tensorInputSize/2},{tensorInputSize/2,tensorInputSize/2} },0);
 
-    if (1)
-    {
-        auto x1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-        auto x2 = CD3DX12_RESOURCE_DESC::Buffer(tensorInputSize);
-        THROW_IF_FAILED(ml.d3D12Device->CreateCommittedResource(
-            &x1,
-            D3D12_HEAP_FLAG_NONE,
-            &x2,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&uploadBuffer)));
-        auto x3 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        auto x4 = CD3DX12_RESOURCE_DESC::Buffer(tensorInputSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        THROW_IF_FAILED(ml.d3D12Device->CreateCommittedResource(
-            &x3,
-            D3D12_HEAP_FLAG_NONE,
-            &x4,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr,
-            IID_PPV_ARGS(&inputBuffer)));
-    }
+   if (Method == 3)
+       ml.CreateBuffers(tensorInputSize, inputTensorElementArray.data(), { {0,tensorInputSize / 2},{tensorInputSize / 2,tensorInputSize / 2} },0);
 
-    D3D12_SUBRESOURCE_DATA tensorSubresourceData{};
-    tensorSubresourceData.pData = inputTensorElementArray.data();
-    tensorSubresourceData.RowPitch = static_cast<LONG_PTR>(tensorInputSize);
-    tensorSubresourceData.SlicePitch = tensorSubresourceData.RowPitch;
-
-    // Upload the input tensor to the GPU.
-    ::UpdateSubresources(ml.commandList,inputBuffer,uploadBuffer,0,0,1,&tensorSubresourceData);
-
-    auto x9 = CD3DX12_RESOURCE_BARRIER::Transition(inputBuffer,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-   ml.commandList->ResourceBarrier( 1,&x9);
-
-    // Abs
     if (Method == 1)
-    {
-        DML_BUFFER_BINDING inputBufferBinding{ inputBuffer, 0, tensorInputSize };
-        DML_BINDING_DESC inputBindingDesc{ DML_BINDING_TYPE_BUFFER, &inputBufferBinding };
-        ml.dmlBindingTable->BindInputs(1, &inputBindingDesc);
-    }
-    // Add
+        ml.CreateBuffers(tensorOutputSize, 0, { {0,tensorOutputSize} }, 1);
+
     if (Method == 2)
-    {
-        // split the input buffer to half to add two tensors
-        DML_BUFFER_BINDING inputBufferBinding[2] = {};
-        inputBufferBinding[0].Buffer = inputBuffer;
-        inputBufferBinding[0].Offset = 0;
-        inputBufferBinding[0].SizeInBytes = tensorInputSize / 2;
-        inputBufferBinding[1].Buffer = inputBuffer;
-        inputBufferBinding[1].Offset = tensorInputSize /2;
-        inputBufferBinding[1].SizeInBytes = tensorInputSize / 2;
+        ml.CreateBuffers(tensorOutputSize, 0, { {0,tensorOutputSize/2} }, 1);
 
-        DML_BINDING_DESC inputBindingDesc[2] = {};
-        inputBindingDesc[0].Type = DML_BINDING_TYPE_BUFFER;
-        inputBindingDesc[0].Desc = &inputBufferBinding[0];
-        inputBindingDesc[1].Type = DML_BINDING_TYPE_BUFFER;
-        inputBindingDesc[1].Desc = &inputBufferBinding[1];
-
-        ml.dmlBindingTable->BindInputs(2, inputBindingDesc);
-    }
-    // Linear Regression
     if (Method == 3)
-    {
-        // two input tensors, split array
-        DML_BUFFER_BINDING inputBufferBinding[2] = {};
-        inputBufferBinding[0].Buffer = inputBuffer;
-        inputBufferBinding[0].Offset = 0;
-        inputBufferBinding[0].SizeInBytes = tensorInputSize / 2;
-        inputBufferBinding[1].Buffer = inputBuffer;
-        inputBufferBinding[1].Offset = tensorInputSize / 2;
-        inputBufferBinding[1].SizeInBytes = tensorInputSize / 2;
-
-        DML_BINDING_DESC inputBindingDesc[2] = {};
-        inputBindingDesc[0].Type = DML_BINDING_TYPE_BUFFER;
-        inputBindingDesc[0].Desc = &inputBufferBinding[0];
-        inputBindingDesc[1].Type = DML_BINDING_TYPE_BUFFER;
-        inputBindingDesc[1].Desc = &inputBufferBinding[1];
-
-        ml.dmlBindingTable->BindInputs(2, inputBindingDesc);
-    }
-
-    CComPtr<ID3D12Resource> outputBuffer;
-    if (Method == 1)
-    {
-        auto x5 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        auto x6 = CD3DX12_RESOURCE_DESC::Buffer(tensorOutputSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        THROW_IF_FAILED(ml.d3D12Device->CreateCommittedResource(
-            &x5,
-            D3D12_HEAP_FLAG_NONE,
-            &x6,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            nullptr,
-            IID_PPV_ARGS(&outputBuffer)));
-
-        DML_BUFFER_BINDING outputBufferBinding{ outputBuffer, 0, tensorOutputSize };
-        DML_BINDING_DESC outputBindingDesc{ DML_BINDING_TYPE_BUFFER, &outputBufferBinding };
-        ml.dmlBindingTable->BindOutputs(1, &outputBindingDesc);
-    }
-    if (Method == 2)
-    {
-        auto x5 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        auto x6 = CD3DX12_RESOURCE_DESC::Buffer(tensorOutputSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        THROW_IF_FAILED(ml.d3D12Device->CreateCommittedResource(
-            &x5,
-            D3D12_HEAP_FLAG_NONE,
-            &x6,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            nullptr,
-            IID_PPV_ARGS(&outputBuffer)));
-
-        DML_BUFFER_BINDING outputBufferBinding{ outputBuffer, 0, tensorOutputSize /2 };
-        DML_BINDING_DESC outputBindingDesc{ DML_BINDING_TYPE_BUFFER, &outputBufferBinding };
-        ml.dmlBindingTable->BindOutputs(1, &outputBindingDesc);
-    }
-    if (Method == 3)
-    {
-        // More output buffers
-
-        auto x5 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        auto x6 = CD3DX12_RESOURCE_DESC::Buffer(tensorOutputSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        THROW_IF_FAILED(ml.d3D12Device->CreateCommittedResource(
-            &x5,
-            D3D12_HEAP_FLAG_NONE,
-            &x6,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            nullptr,
-            IID_PPV_ARGS(&outputBuffer)));
-
-        DML_BUFFER_BINDING outputBufferBinding[6] = {};
-
-
-        outputBufferBinding[0].Buffer = outputBuffer;
-        outputBufferBinding[0].Offset = 0;
-        outputBufferBinding[0].SizeInBytes = Method3TensorSizes[0]; // Buffer 1 is Sx, we want N floats (in which only the final we are interested in), also aligned to DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT
-
-        outputBufferBinding[1].Buffer = outputBuffer;
-        outputBufferBinding[1].Offset = Method3TensorSizes[0];
-        outputBufferBinding[1].SizeInBytes = Method3TensorSizes[1]; // Same for Sy
-
-        outputBufferBinding[2].Buffer = outputBuffer;
-        outputBufferBinding[2].Offset = Method3TensorSizes[0] + Method3TensorSizes[1];
-        outputBufferBinding[2].SizeInBytes = Method3TensorSizes[2]; // Same for xy
-
-        outputBufferBinding[3].Buffer = outputBuffer;
-        outputBufferBinding[3].Offset = Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2];
-        outputBufferBinding[3].SizeInBytes = Method3TensorSizes[3]; // Same for Sxy
-
-        outputBufferBinding[4].Buffer = outputBuffer;
-        outputBufferBinding[4].Offset = Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2] + Method3TensorSizes[3];
-        outputBufferBinding[4].SizeInBytes = Method3TensorSizes[4]; // Same for xx
-
-        outputBufferBinding[5].Buffer = outputBuffer;
-        outputBufferBinding[5].Offset = Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2] + Method3TensorSizes[3] + Method3TensorSizes[4];
-        outputBufferBinding[5].SizeInBytes = Method3TensorSizes[5]; // Same for Sxx
-
-        DML_BINDING_DESC od[6] = {};
-        od[0].Type = DML_BINDING_TYPE_BUFFER;
-        od[0].Desc = &outputBufferBinding[0];
-        od[1].Type = DML_BINDING_TYPE_BUFFER;
-        od[1].Desc = &outputBufferBinding[1];
-        od[2].Type = DML_BINDING_TYPE_BUFFER;
-        od[2].Desc = &outputBufferBinding[2];
-        od[3].Type = DML_BINDING_TYPE_BUFFER;
-        od[3].Desc = &outputBufferBinding[3];
-        od[4].Type = DML_BINDING_TYPE_BUFFER;
-        od[4].Desc = &outputBufferBinding[4];
-        od[5].Type = DML_BINDING_TYPE_BUFFER;
-        od[5].Desc = &outputBufferBinding[5];
-
-       ml.dmlBindingTable->BindOutputs(6, od);
-    }
+        ml.CreateBuffers(tensorOutputSize, 0, { 
+            {0,Method3TensorSizes[0]},
+            {Method3TensorSizes[0],Method3TensorSizes[1]},
+            {Method3TensorSizes[0] + Method3TensorSizes[1],Method3TensorSizes[2]},
+            {Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2],Method3TensorSizes[3]},
+            {Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2] + Method3TensorSizes[3],Method3TensorSizes[4]},
+            {Method3TensorSizes[0] + Method3TensorSizes[1] + Method3TensorSizes[2] + Method3TensorSizes[3] + Method3TensorSizes[4],Method3TensorSizes[5]},
+            }, 1);
 
     // Run it
     ml.Record(1);
@@ -752,10 +679,10 @@ int main()
         nullptr,
         IID_PPV_ARGS(&readbackBuffer)));
 
-    auto x10 = CD3DX12_RESOURCE_BARRIER::Transition(outputBuffer,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    auto x10 = CD3DX12_RESOURCE_BARRIER::Transition(ml.outputBuffer,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
     ml.commandList->ResourceBarrier(1,&x10);
 
-    ml.commandList->CopyResource(readbackBuffer, outputBuffer);
+    ml.commandList->CopyResource(readbackBuffer, ml.outputBuffer);
 
     ml.CloseExecuteResetWait();
 
@@ -765,6 +692,22 @@ int main()
     std::wstring outputString;
 
     float Sx = 0, Sy = 0, Sxy = 0, Sx2 = 0;
+    if (Method == 1)
+    {
+        outputString += L"Output\r\n-----------------\r\n";
+        for (size_t tensorElementIndex = 0; tensorElementIndex < 4 ; ++tensorElementIndex, ++outputBufferData)
+            outputString += std::to_wstring(*outputBufferData) + L' ';
+        outputString += L"\r\n\r\n";
+        std::wcout << outputString;
+    }
+    if (Method == 2)
+    {
+        outputString += L"Output\r\n-----------------\r\n";
+        for (size_t tensorElementIndex = 0; tensorElementIndex < 8; ++tensorElementIndex, ++outputBufferData)
+            outputString += std::to_wstring(*outputBufferData) + L' ';
+        outputString += L"\r\n\r\n";
+        std::wcout << outputString;
+    }
     if (Method == 3)
     {
         // Output 1, 
