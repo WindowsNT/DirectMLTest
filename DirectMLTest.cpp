@@ -594,7 +594,7 @@ int main()
     ::UpdateSubresources(ml.commandList,inputBuffer,uploadBuffer,0,0,1,&tensorSubresourceData);
 
     auto x9 = CD3DX12_RESOURCE_BARRIER::Transition(inputBuffer,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ml.commandList->ResourceBarrier( 1,&x9);
+/   ml.commandList->ResourceBarrier( 1,&x9);
 
     // Abs
     if (Method == 1)
@@ -752,15 +752,8 @@ int main()
         nullptr,
         IID_PPV_ARGS(&readbackBuffer)));
 
-    auto x10 = CD3DX12_RESOURCE_BARRIER::Transition(
-        outputBuffer,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_COPY_SOURCE
-    );
-    ml.commandList->ResourceBarrier(
-        1,
-        &x10
-    );
+    auto x10 = CD3DX12_RESOURCE_BARRIER::Transition(outputBuffer,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ml.commandList->ResourceBarrier(1,&x10);
 
     ml.commandList->CopyResource(readbackBuffer, outputBuffer);
 
