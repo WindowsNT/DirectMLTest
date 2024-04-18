@@ -424,7 +424,7 @@ int main()
     // Create the DirectML device.
     THROW_IF_FAILED(ml.CreateDML());
 
-#define Method 1
+#define Method 3
 #ifndef Method
 #error Please define Method above to 1,2 or 3
 #endif
