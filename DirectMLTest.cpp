@@ -594,7 +594,7 @@ int main()
     ::UpdateSubresources(ml.commandList,inputBuffer,uploadBuffer,0,0,1,&tensorSubresourceData);
 
     auto x9 = CD3DX12_RESOURCE_BARRIER::Transition(inputBuffer,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-/   ml.commandList->ResourceBarrier( 1,&x9);
+   ml.commandList->ResourceBarrier( 1,&x9);
 
     // Abs
     if (Method == 1)
@@ -623,7 +623,7 @@ int main()
 
         ml.dmlBindingTable->BindInputs(2, inputBindingDesc);
     }
-    // Add
+    // Linear Regression
     if (Method == 3)
     {
         // two input tensors, split array
